@@ -1,4 +1,4 @@
-### This repository contains the scripts used for the following study:
+This repository contains the scripts used for the following study:
 
 ## Reconstruction of the Mouse Olfactory Glomerular Map using Single-Cell Technologies
 
@@ -19,8 +19,9 @@ Note:
 1. the scripts start with "bk" refers to the bulk RNAseq analysis
 2. the scripts start with "sc" refers to the single cell RNAseq analysis
 3. the scripts start with "ss" refers to the Slide-seq V2 analysis
-4. for the Slide-seq V2 analysis, there were two sets of data used in the this study and one copy of the script provided since the same data processing procedue was performed.
-5. `Figures.R` contains all the codes for generating figures in this study
+4. the scripts start with "map" refers to the reconstructed map analysis
+5. for the Slide-seq V2 analysis, there were two sets of data used in the this study and one copy of the script provided since the same data processing procedue was performed.
+6. `Figures.R` contains all the codes for generating figures in this study
 
 
 
