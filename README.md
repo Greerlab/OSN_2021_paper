@@ -2,7 +2,7 @@
 
 ## Reconstruction of the Mouse Olfactory Glomerular Map using Single-Cell Technologies
 
-### I-Hao Wang <sup>1<sup>, Evan Murray <sup>2,8<sup>, Greg Andrews <sup>3,8<sup>, Elisa Donnard<sup>3,8<sup>, Hao-Ching Jiang<sup>1<sup>, Sung Jin Park<sup>1<sup>, ### Daniel M. Bear<sup>4,5<sup>, Manuel Garber<sup>1,3<sup>, Zhiping Weng<sup>3<sup>, Fei Chen<sup>2,6<sup>, Evan Z. Macosko<sup>2,7<sup>, Paul L. Greer<sup>1,*<sup>
+### I-Hao Wang <sup>1, Evan Murray <sup>2,8<sup>, Greg Andrews <sup>3,8<sup>, Elisa Donnard<sup>3,8<sup>, Hao-Ching Jiang<sup>1<sup>, Sung Jin Park<sup>1<sup>, ### Daniel M. Bear<sup>4,5<sup>, Manuel Garber<sup>1,3<sup>, Zhiping Weng<sup>3<sup>, Fei Chen<sup>2,6<sup>, Evan Z. Macosko<sup>2,7<sup>, Paul L. Greer<sup>1,*<sup>
 
 Affiliations
 <sup>1<sup>Program in Molecular Medicine, University of Massachusetts Medical School, Worcester, MA, USA
