@@ -13,7 +13,9 @@ This repository contains the scripts used for the following study:
 <sup>7</sup>Department of Psychiatry, Massachusetts General Hospital, Boston, MA, USA, 
 <sup>8</sup>These authors contributed equally, 
 <sup>*</sup>Corresponding author.
-  
+
+
+The sequence data will be available after publication
 
 Note:
 1. the scripts start with "bk" refers to the bulk RNAseq analysis
