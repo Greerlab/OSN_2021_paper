@@ -8,7 +8,7 @@ library(cluster)
 start_n = as.integer(args[1])
 end_n = as.integer(args[2])
 
-OSN = readRDS("OR_OSN_filtered.rds")
+OSN = readRDS("data/OR_OSN.rds")
 Freq = as.data.frame(table(OSN$OR_identity))
 ORs = as.character(Freq$Var1[Freq$Freq>=7])
 matrix_input = OSN
