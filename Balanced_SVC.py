@@ -18,7 +18,7 @@ R = int(sys.argv[1])
 # In[83]:
 
 
-data = pd.read_csv('svm_654_rm_all_50SPCs_3000G.csv')
+data = pd.read_csv('svm_654_rm_all_50SPCs_3000G.csv') #Use the OR removed 654 OR OSN data with top 3000 variable genes to generate top 50 SPC
 data = data.reset_index(drop = True)
 X = data.values[:,:42]
 y = data["observed"].values
