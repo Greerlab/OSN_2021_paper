@@ -17,15 +17,18 @@ This repository contains the scripts used for the following study:
 <sup>*</sup>Corresponding author.
 
 
-The sequence data will be available after publication
+The raw data can be downloaded at [GSE169021](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE169021) (data will be available after publication)
 
 Note:
 1. the scripts start with "bk" refers to the bulk RNAseq analysis
 2. the scripts start with "sc" refers to the single cell RNAseq analysis
 3. the scripts start with "ss" refers to the Slide-seq V2 analysis
 4. the scripts start with "map" refers to the reconstructed map analysis
-5. for the Slide-seq V2 analysis, there were two sets of data used in the this study and one copy of the script provided since the same data processing procedue was performed.
+5. for the Slide-seq V2 analysis, there were two sets of data used in the this study and one copy of the script provided since the same data processing procedue was performed
 6. `Figures.R` contains all the codes for generating figures in this study
+7. `data/map_pre.rds` contains all the information of reconstructed map
+8. Due to the size, some of the intermediate files are not include in these repository, but it can be generated from the raw data provided in GEO
+9. Contact information: I-Hao Wang (I-Hao.Wang@umassmed.edu), Dr. Paul Greer (Paul.Greer@umassmed.edu)
 
 
 
