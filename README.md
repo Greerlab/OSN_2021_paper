@@ -27,7 +27,7 @@ Note:
 5. for the Slide-seq V2 analysis, there were two sets of data used in the this study and one copy of the script provided since the same data processing procedue was performed
 6. `Figures.R` contains all the codes for generating figures in this study
 7. `data/map_pre.rds` contains all the information of reconstructed map
-8. Due to the size, some of the intermediate files are not include in these repository, but it can be generated from the raw data provided in GEO
+8. Due to the size, some of the intermediate files are not include in this repository, but it can be generated from the raw data provided in GEO
 9. Contact information: I-Hao Wang (I-Hao.Wang@umassmed.edu), Dr. Paul Greer (Paul.Greer@umassmed.edu)
 
 
