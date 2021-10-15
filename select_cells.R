@@ -1,3 +1,7 @@
+require(shiny)
+require(plotly)
+library(ggplot2)
+require(viridis)
 ui <- fluidPage(
   plotlyOutput("plot"),
   verbatimTextOutput("brush")
@@ -11,7 +15,7 @@ server <- function(input, output, session) {
       scale_color_viridis(option = "D", direction = -1) +
       theme_void()
     ggplotly(p,height = 800, width = 900) %>% toWebGL() %>%
-      highlight("plotly_selected", dynamic = TRUE)
+      highlight("plotly_selected", dynamic = F )
   })
   output$brush <- renderPrint({
     d <- event_data("plotly_selected")
@@ -19,6 +23,6 @@ server <- function(input, output, session) {
     sel = dplyr::inner_join(d,pd)
     print(sel)
     write(sel$cell,
-          paste0("data/MGL_info/OB",s,"_slide",i,"medial_GL.txt"))
+          paste0("data/OB",m,"_slideseq/Slide",s,"clean.txt"))
   })
 }

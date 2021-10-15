@@ -14,7 +14,7 @@ library(Seurat)
 library(dplyr)
 library(ggrepel)
 library(ggpubr)
-library(Seurat)
+library(caret)
 library(scales)
 library(harmony)
 library(gridExtra)
@@ -23,9 +23,8 @@ library(reticulate)
 library(ggtext)
 library(AnnotationDbi)
 library(GO.db)
-library(SeuratWrappers)
-library(monocle3)
 library(viridis)
+library(MLmetrics)
 library(ComplexHeatmap)
 library(jpeg)
 library(ape)
@@ -46,7 +45,7 @@ map_obs = read.table("data/map_obs.txt", header = T) # map observed by slide seq
 map_pre = readRDS("data/map_pre.rds") # reconstructed map
 # note that the x and y column in the map_pre and map_obs are slide position and pixel
 # to transform into um : x*130 (slides are spaced with 130 um) and y*0.65 (beads are spaced with 0.65 um)
-img = readJPEG("data/projection2.jpg") # the background of glomeruli map
+img = readJPEG("data/projection3.jpg") # the background of glomeruli map
 source("DEseq2_fun.R") # DESseq2 customized function
 source("Seruat_fun.R") # Seurat customized function
 source("pair_analysis_harmony.R") # for silhouette coefficient analysis
@@ -84,18 +83,6 @@ DEG3 = as.data.frame(res3)
 DEG3$Genes = rownames(DEG3)
 list_of_datasets <- list("M72_M174_9" = DEG1, "MOR28_M174_9" = DEG2, "MOR28_M72" = DEG3)
 openxlsx::write.xlsx(list_of_datasets, file = "data/Supplementary table 1.xlsx")
-upsetdf = cbind.data.frame(c(set1,set2,set3),c(rep("DEGs between Olfr160 and Olfr73",length(set1)),rep("DEGs between Olfr1507 and Olfr73",length(set2)),rep("DEGs between Olfr1507 and Olfr160",length(set3))))
-colnames(upsetdf) = c("gene","set")
-upsetdf = as.data.frame(dcast(upsetdf, gene ~ set))
-upsetdf = upsetdf[,-1]
-upsetdf[!is.na(upsetdf)] =1
-upsetdf[is.na(upsetdf)] = 0
-upsetdf = apply(upsetdf, 2, as.numeric)
-pdf("Figure1c_new.pdf", width = 5, height = 5)
-upset(as.data.frame(upsetdf))
-dev.off()
-
-
 
 ##### 1d #####
 res1 <- results(dds, contrast=c("genotype","M72","MOR174_9"))
@@ -114,7 +101,6 @@ print(pheatmap(assay(vsd)[genes,], cluster_rows=TRUE, show_rownames=FALSE, color
 dev.off()
 
 ##### 1e #####
-ensembl = useMart("ensembl")
 #listDatasets(ensembl)
 ensembl = useMart("ensembl", dataset="mmusculus_gene_ensembl")
 #listAttributes(ensembl)
@@ -277,7 +263,7 @@ ggplot(freq, aes(OR_identity, n))+stat_summary(geom = "point", fun = mean, alpha
                box.padding   = 0.35, 
                point.padding = 0.5, nudge_x= -0.1, direction = "y",force_pull = 0,max.overlaps = Inf)+
   theme_classic()+theme(axis.text.x=element_blank(),axis.ticks.x=element_blank())+xlab("OR type")+ylab("Cell number")
-ggsave("plots/FigureE3c.pdf", width = 10, height = 10, units = "in")
+ggsave("plots/FigureE3c.pdf", width = 20, height = 10, units = "in")
 
 ##### E3d #####
 metadf = OSN@meta.data
@@ -313,6 +299,7 @@ ggsave("plots/FigureE3d.pdf", width = 15, height = 12)
 #ggsave("plots/FigureE3d.jpeg", width = 15, height = 12, dpi = 300, units = "in")
 
 ##### 2a #####
+
 ORs = sample(unique(OSN$OR_identity), 10)
 #the OR random selected was "Olfr728","Olfr741","Olfr1260","Olfr390","Olfr1440","Olfr1030","Olfr571","Olfr1507","Olfr806", and"Olfr536"
 my_color_palette <- hue_pal()(length(ORs))
@@ -321,6 +308,60 @@ plots = list()
 for (i in 1:length(ORs)) {
   cells = WhichCells(OSN, idents = c(paste0(ORs[i])))
   plots[[i]] = DimPlot(OSN, cells.highlight = cells, cols.highlight = my_color_palette[i])+NoAxes()+NoLegend()+ggtitle(ORs[i])
+}
+jpeg("plots/Figure2a.jpeg", width = 15, height = 6, res = 300, units = "in")
+wrap_plots(plots, ncol = 5)
+dev.off()
+
+### following analysis was used to generate the same plot but avoiding the PCs dominated by the most abundant OR OSN types
+# reload OR_OSN.rds
+Idents(OSN) = OSN$OR_identity
+Freq = as.data.frame(table(OSN$OR_identity))
+ORs5up = as.character(Freq$Var1[Freq$Freq>5])
+
+OSN5up = subset(OSN, ident = ORs5up)
+OSNrest= subset(OSN, ident = ORs5up, invert = T)
+metadata = OSN5up@meta.data
+#take min number of cells
+ncells = 6
+
+# split each OSN group of min number
+chunks <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
+ncells_list = list()
+for (i in 1:length(ORs5up)) {
+  sub =  metadata[metadata$OR_identity==ORs5up[i],]
+  ncells_list[[i]] = chunks(sample(rownames(sub)), ncells)
+}
+
+# average the normalized transcriptome into avergae cells
+metadata$group = NA
+for (i in 1:ncells) {
+  cell = unlist(lapply(ncells_list, `[[`, i))
+  metadata$group[rownames(metadata)%in%cell]=i
+}
+metadata$ave_cell = paste0(metadata$OR_identity,"_",metadata$group)
+OSN5up@meta.data = metadata
+Idents(OSN5up) = OSN5up$ave_cell
+OSN5up_ave = AverageExpression(OSN5up, return.seurat = T)
+OSN_balanced = merge(OSN5up_ave, OSNrest)
+OSN_balanced = FindVariableFeatures(OSN_balanced, nfeatures = 2000)
+genes = VariableFeatures(OSN_balanced)
+genes = genes[-grep("Xist|mt-|Rp",genes)]
+
+OSN_balanced_norm = OSN_balanced@assays$RNA@data[genes,]
+prin_comp <- prcomp(t(OSN_balanced_norm), center = TRUE,scale. = TRUE)
+projected_OSN = scale(t(as.matrix(OSN@assays$RNA@data[genes,])), prin_comp$center, prin_comp$scale) %*% prin_comp$rotation 
+OSN[["bpca"]] <- CreateDimReducObject(embeddings = projected_OSN[,1:50], key = "BPC_", assay = DefaultAssay(OSN))
+OSN = RunUMAP(OSN, reduction = "bpca", dims = 1:12)
+
+ORs = sample(unique(OSN$OR_identity), 10)
+#ORs = c("Olfr728","Olfr741","Olfr1260","Olfr390","Olfr1440","Olfr1030","Olfr571","Olfr1507","Olfr806", "Olfr536")
+my_color_palette <- hue_pal()(length(ORs))
+Idents(OSN) = OSN$OR_identity
+plots = list()
+for (i in 1:length(ORs)) {
+  cells = WhichCells(OSN, idents = c(paste0(ORs[i])))
+  plots[[i]] = DimPlot(OSN, cells.highlight = cells, cols.highlight = my_color_palette[i])+NoAxes()+NoLegend()+ggtitle("")
 }
 jpeg("plots/Figure2a.jpeg", width = 15, height = 6, res = 300, units = "in")
 wrap_plots(plots, ncol = 5)
@@ -338,25 +379,67 @@ wrap_plots(plots, ncol = 2)
 dev.off()
 
 ##### E4b #####
-metadf = OSN@meta.data
-OSNrm = OSN@assays$RNA@counts
-OSNrm = OSNrm[grep("Olfr",rownames(OSNrm), value = T,invert = T ),]
-OSNrm = CreateSeuratObject(OSNrm)
-OSNrm = NormalizeData(OSNrm)
-OSNrm = FindVariableFeatures(OSNrm)
-OSNrm = ScaleData(OSNrm)
-OSNrm = RunPCA(OSNrm)
-OSNrm@meta.data = metadf
-OSNrm = RunHarmony(OSNrm, group.by.vars = "orig.ident")
-ElbowPlot(OSNrm, reduction = "harmony")
-OSNrm <- RunUMAP(OSNrm, reduction = "harmony", dims = 1:12)
-saveRDS(OSNrm,"data/OR_OSN_rm.rds")
 my_color_palette <- hue_pal()(length(ORs))
-Idents(OSNrm) = OSN$OR_identity
+Idents(OSN_rm) = OSN_rm$OR_identity
 plots = list()
 for (i in 1:length(ORs)) {
-  cells = WhichCells(OSNrm, idents = c(paste0(ORs[i])))
-  plots[[i]] = DimPlot(OSNrm, cells.highlight = cells, cols.highlight = my_color_palette[i])+NoAxes()+NoLegend()
+  cells = WhichCells(OSN_rm, idents = c(paste0(ORs[i])))
+  plots[[i]] = DimPlot(OSN_rm, cells.highlight = cells, cols.highlight = my_color_palette[i])+NoAxes()+NoLegend()
+}
+jpeg("plots/FigureE4b.jpeg", width = 15, height = 6, res = 300, units = "in")
+wrap_plots(plots, ncol = 5)
+dev.off()
+
+### following analysis was used to generate the same plot but avoiding the PCs dominated by the most abundant OR OSN_rm types
+# reload OR_OSN_rm_rm.rds
+
+Idents(OSN_rm) = OSN_rm$OR_identity
+Freq = as.data.frame(table(OSN_rm$OR_identity))
+ORs5up = as.character(Freq$Var1[Freq$Freq>5])
+
+OSN_rm5up = subset(OSN_rm, ident = ORs5up)
+OSN_rmrest= subset(OSN_rm, ident = ORs5up, invert = T)
+metadata = OSN_rm5up@meta.data
+#take min number of cells
+ncells = 6
+
+# split each OSN_rm group of min number
+chunks <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
+ncells_list = list()
+for (i in 1:length(ORs5up)) {
+  sub =  metadata[metadata$OR_identity==ORs5up[i],]
+  ncells_list[[i]] = chunks(sample(rownames(sub)), ncells)
+}
+
+# average the normalized transcriptome into avergae cells
+metadata$group = NA
+for (i in 1:ncells) {
+  cell = unlist(lapply(ncells_list, `[[`, i))
+  metadata$group[rownames(metadata)%in%cell]=i
+}
+metadata$ave_cell = paste0(metadata$OR_identity,"_",metadata$group)
+OSN_rm5up@meta.data = metadata
+Idents(OSN_rm5up) = OSN_rm5up$ave_cell
+OSN_rm5up_ave = AverageExpression(OSN_rm5up, return.seurat = T)
+OSN_rm_balanced = merge(OSN_rm5up_ave, OSN_rmrest)
+OSN_rm_balanced = FindVariableFeatures(OSN_rm_balanced, nfeatures = 2000)
+genes = VariableFeatures(OSN_rm_balanced)
+genes = genes[-grep("Xist|mt-|Rp",genes)]
+
+OSN_rm_balanced_norm = OSN_rm_balanced@assays$RNA@data[genes,]
+prin_comp <- prcomp(t(OSN_rm_balanced_norm), center = TRUE,scale. = TRUE)
+projected_OSN_rm = scale(t(as.matrix(OSN_rm@assays$RNA@data[genes,])), prin_comp$center, prin_comp$scale) %*% prin_comp$rotation 
+OSN_rm[["bpca"]] <- CreateDimReducObject(embeddings = projected_OSN_rm[,1:50], key = "BPC_", assay = DefaultAssay(OSN_rm))
+OSN_rm = RunUMAP(OSN_rm, reduction = "bpca", dims = 1:25)
+
+ORs = sample(unique(OSN_rm$OR_identity), 10)
+#ORs = c("Olfr728","Olfr741","Olfr1260","Olfr390","Olfr1440","Olfr1030","Olfr571","Olfr1507","Olfr806", "Olfr536")
+my_color_palette <- hue_pal()(length(ORs))
+Idents(OSN_rm) = OSN_rm$OR_identity
+plots = list()
+for (i in 1:length(ORs)) {
+  cells = WhichCells(OSN_rm, idents = c(paste0(ORs[i])))
+  plots[[i]] = DimPlot(OSN_rm, cells.highlight = cells, cols.highlight = my_color_palette[i])+NoAxes()+NoLegend()+ggtitle("")
 }
 jpeg("plots/FigureE4b.jpeg", width = 15, height = 6, res = 300, units = "in")
 wrap_plots(plots, ncol = 5)
@@ -393,7 +476,7 @@ grid.arrange(grobs = UMAP_plot, layout_matrix = my_layout)
 dev.off()
 
 ##### E4c #####
-matrix_input = OSNrm
+matrix_input = OSN_rm
 Ident_input = "OR_identity"
 Idents(matrix_input) = matrix_input@meta.data[,Ident_input]
 Pairs = combn(unique(pair_input),2)
@@ -419,8 +502,8 @@ grid.arrange(grobs = UMAP_plot, layout_matrix = my_layout)
 dev.off()
 
 ##### E4d #####
-OSNrm$OR_identity = as.character(sample(OSNrm$OR_identity))
-matrix_input = OSNrm
+OSN_rm$OR_identity = as.character(sample(OSN_rm$OR_identity))
+matrix_input = OSN_rm
 Ident_input = "OR_identity"
 Idents(matrix_input) = matrix_input@meta.data[,Ident_input]
 Pairs = combn(unique(pair_input),2)
@@ -452,7 +535,7 @@ OR654 = OSN654 %>%
   NormalizeData() %>% FindVariableFeatures() %>% ScaleData()
 saveRDS(OR654, "data/OR_OSN_654.rds")
 
-OSN654rm = subset(OSNrm, ident = OR654)
+OSN654rm = subset(OSN_rm, ident = OR654)
 OSN654rm = OSN654rm %>%
   NormalizeData() %>% FindVariableFeatures() %>% ScaleData()
 saveRDS(OR654rm, "data/OR_OSN_654_rm.rds")
@@ -460,6 +543,7 @@ saveRDS(OR654rm, "data/OR_OSN_654_rm.rds")
 OSN654rmS = OSN654rm
 OSN654rmS$OR_identity = sample(OSN654rmS$OR_identity)
 saveRDS(OSN654rmS, "data/OR_OSN_654_rms.rds")
+
 # Each of above 3 inputs was used to run the Sil.R on hpcc for parallelizing 213531 combinations from 654 groups of OR
 # The result silhouette coefficent was stored as "OR_",start_n,"_",end_n,".rds", start_n and end_n refer to the subset of combinations.
 # all the data were downloaded to data/
@@ -506,88 +590,58 @@ dev.off()
 write.table(df, "data/F2c_result.txt")
 
 ##### 2d #####
-OR10 = Freq$Var1[1:10]
-Idents(OSN) = OSN$OR_identity
-OR10 = as.character(OR10)
-OSN10 = subset(OSN, idents = OR10)
-subdf = OSN10@meta.data
-OSN10 = OSN10@assays$RNA@counts
-OSN10 = OSN10[grep("Olfr",rownames(OSN10), invert = T),]
-OSN10 = CreateSeuratObject(OSN10)
-OSN10 = NormalizeData(OSN10)
-OSN10 = FindVariableFeatures(OSN10, nfeatures = 3000)
-OSN10 = ScaleData(OSN10)
-OSN10 = RunPCA(OSN10, npcs = 50)
-OSN10@meta.data = subdf
-OSN10 = RunHarmony(OSN10, group.by.vars = "orig.ident")
-OSN10 = FindNeighbors(OSN10, reduction = "harmony")
-OSN10 = RunSPCA(OSN10, graph = "RNA_snn")
-df = as.data.frame(OSN10@reductions$spca@cell.embeddings)
-df$observed = OSN10$OR_identity
-df$barcodes = rownames(df)
-saveRDS(OSN10, "data/OR_OSN_10_rm.rds")
-write.table(df, "data/svm_10_rm_all_50SPCs_3000G.csv", sep = ",")
+##left 10 OR
+Freq = Freq[order(Freq$Freq, decreasing = T),]
+OR10 = as.character(unique(Freq$Var1[1:10]))
+OR10 = subset(OSN_rm, ident = OR10)
+OR10 = OR10 %>%
+  NormalizeData() %>% FindVariableFeatures() %>% ScaleData()
+saveRDS(OR654, "data/OR_10.rds")
 
-OR654 = as.character(unique(Freq$Var1[Freq$Freq>=7]))
-Idents(OSN) = OSN$OR_identity
-OSN654 = subset(OSN, idents = OR654)
-subdf = OSN654@meta.data
-OSN654 = OSN654@assays$RNA@counts
-OSN654 = OSN654[grep("Olfr",rownames(OSN654), invert = T),]
-OSN654 = CreateSeuratObject(OSN654)
-OSN654 = NormalizeData(OSN654)
-OSN654 = FindVariableFeatures(OSN654, nfeatures = 3000)
-OSN654 = ScaleData(OSN654)
-OSN654 = RunPCA(OSN654, npcs = 50)
-OSN654@meta.data = subdf
-OSN654 = RunHarmony(OSN654, group.by.vars = "orig.ident")
-OSN654 = FindNeighbors(OSN654, reduction = "harmony")
-OSN654 = RunSPCA(OSN654, graph = "RNA_snn")
-df = as.data.frame(OSN654@reductions$spca@cell.embeddings)
-df$observed = OSN654$OR_identity
-df$barcodes = rownames(df)
-saveRDS(OSN654, "data/OR_OSN_654_rm.rds")
-write.table(df, "data/svm_654_rm_all_50SPCs_3000G.csv", sep = ",")
-# above 2 csv file was used as the input of Balanced_SVC.py for 100 repeats, ran on the hpcc, the results were downlaoded to data/
-#10
-OR = list.files("data/clf_10/", pattern = "results", full.names = T)
-Sh = list.files("data/clf_10_shuffled/", pattern = "results", full.names = T)
+# classifier_input_generation_10_OR_hpcc.R was used to generate the train and test split on hpcc
+# SVM_10.py was used run the classifer on hpcc and the results were downloaded to data/SVM_10
+
+OR = list.files("data/SVM_10/", pattern = "Result", full.names = T)
+Sh = list.files("data/SVM_10_shuffle/", pattern = "Result", full.names = T)
 
 OR_list = list()
 for (i in 1:length(OR)) {
-  OR_list[[i]] = read.csv(OR[i])
+  OR_list[[i]] = read.csv(OR[i], row.names = 1)
+  OR_list[[i]]$rep = i
 }
 OR_list = do.call(rbind.data.frame,OR_list)
 
 
 Sh_list = list()
 for (i in 1:length(Sh)) {
-  Sh_list[[i]] = read.csv(Sh[i])
+  Sh_list[[i]] = read.csv(Sh[i], row.names = 1)
+  Sh_list[[i]]$rep = i
 }
 Sh_list = do.call(rbind.data.frame,Sh_list)
 OR_list$group = "OR"
 Sh_list$group = "sh"
 
-OR_list$test = factor(OR_list$test, levels = unique(OR_list$test))
-OR_list$pred = factor(OR_list$pred, levels = unique(OR_list$test))
-Sh_list$test = factor(Sh_list$test, levels = unique(Sh_list$test))
-Sh_list$pred = factor(Sh_list$pred, levels = unique(Sh_list$test))
+OR_list$observed = factor(OR_list$observed, levels = unique(OR_list$observed))
+OR_list$predicted = factor(OR_list$predicted, levels = unique(OR_list$observed))
+Sh_list$observed = factor(Sh_list$observed, levels = unique(Sh_list$observed))
+Sh_list$predicted = factor(Sh_list$predicted, levels = unique(Sh_list$observed))
 
 OSNdf = OSN@meta.data
 
-OR_list$UMI = OSNdf[OR_list$barcodes,"nCount_RNA"]
-Sh_list$UMI = OSNdf[Sh_list$barcodes,"nCount_RNA"]
+OR_list$UMI = OSNdf[OR_list$barcode,"nCount_RNA"]
+Sh_list$UMI = OSNdf[Sh_list$barcode,"nCount_RNA"]
 
 grouped_acc <- function(df, groups) {
   acc_v = c()
   for (i in unique(df[,groups])) {
     tmp = df[df[,groups]==i,]
-    acc_v = c(acc_v,mean(balanced_score(tmp$test,tmp$pred)))
+    acc_v = c(acc_v,mean(balanced_score(tmp$observed,tmp$predicted)))
   }
   return(acc_v)
 }
 
 merged = rbind.data.frame(OR_list, Sh_list)
+
 write.table(merged,"data/F2d_10_raw_result.txt")
 
 th = c(2600, 4000, 6000, 8000)
@@ -612,11 +666,11 @@ Sh_acc = cbind(unlist(Sh_acc_list),c(rep(th[1],length(Sh_acc_list[[1]])),
 df = rbind.data.frame(OR_acc,Sh_acc)
 
 colnames(df) = c("Balanced_accuracy", "Threshold", "Group")
-write.table(df, "data/F2d_10_result.txt")
+
 
 df$Balanced_accuracy = as.numeric(df$Balanced_accuracy)
 df$Balanced_accuracy = df$Balanced_accuracy*100
-df = read.table("data/F2d_10_result.txt")
+
 df$Threshold = as.character(df$Threshold)
 df$Group = factor(df$Group, levels = c("Shuffle", "OR"))
 
@@ -630,7 +684,7 @@ for (i in 1:length(unique(df$Threshold))) {
   print(x)
   print(x$p.value)
 }
-
+write.table(df, "data/F2d_10_result.txt")
 pdf("plots/Figure2d_left.pdf", width = 5, height = 7)
 ggplot(df, aes(x = Group, y = Balanced_accuracy, fill = Threshold, color = Threshold))+geom_boxplot()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   xlab(NULL)+ylab("Balanced accuracy")+stat_summary(fun=mean, colour="red", geom="text",show.legend = FALSE, aes(x = Group, y = Balanced_accuracy, group = Threshold,label=round(..y.., digits=2)),
@@ -643,44 +697,53 @@ for (i in 1:length(unique(df$Threshold))) {
   print(compare_means(Balanced_accuracy ~ Group, data = df[df$Threshold==unique(df$Threshold)[i],], method = "t.test"))
 }
 
-#654
-OR = list.files("data/clf/", pattern = "results", full.names = T)
-Sh = list.files("data/clf_shuffled/", pattern = "results", full.names = T)
+##right 654 OR
+# classifier_input_generation_654_OR_hpcc.R was used to generate the train and test split on hpcc
+# SVM_654.py was used run the classifer on hpcc and the results were downloaded to data/SVM_654
+
+##right 654 OR
+OR = list.files("data/SVM_654/", pattern = "Result", full.names = T)
+Sh = list.files("data/SVM_654_shuffle/", pattern = "Result", full.names = T)
 
 OR_list = list()
 for (i in 1:length(OR)) {
-  OR_list[[i]] = read.csv(OR[i])
+  OR_list[[i]] = read.csv(OR[i], row.names = 1)
+  OR_list[[i]]$rep = i
 }
 OR_list = do.call(rbind.data.frame,OR_list)
 
 
 Sh_list = list()
 for (i in 1:length(Sh)) {
-  Sh_list[[i]] = read.csv(Sh[i])
+  Sh_list[[i]] = read.csv(Sh[i], row.names = 1)
+  Sh_list[[i]]$rep = i
 }
 Sh_list = do.call(rbind.data.frame,Sh_list)
 OR_list$group = "OR"
 Sh_list$group = "sh"
 
-OR_list$test = factor(OR_list$test, levels = unique(OR_list$test))
-OR_list$pred = factor(OR_list$pred, levels = unique(OR_list$test))
-Sh_list$test = factor(Sh_list$test, levels = unique(Sh_list$test))
-Sh_list$pred = factor(Sh_list$pred, levels = unique(Sh_list$test))
+OR_list$observed = factor(OR_list$observed, levels = unique(OR_list$observed))
+OR_list$predicted = factor(OR_list$predicted, levels = unique(OR_list$observed))
+Sh_list$observed = factor(Sh_list$observed, levels = unique(Sh_list$observed))
+Sh_list$predicted = factor(Sh_list$predicted, levels = unique(Sh_list$observed))
 
+OSNdf = OSN@meta.data
 
-OR_list$UMI = OSNdf[OR_list$barcodes,"nCount_RNA"]
-Sh_list$UMI = OSNdf[Sh_list$barcodes,"nCount_RNA"]
+OR_list$UMI = OSNdf[OR_list$barcode,"nCount_RNA"]
+Sh_list$UMI = OSNdf[Sh_list$barcode,"nCount_RNA"]
 
 grouped_acc <- function(df, groups) {
   acc_v = c()
   for (i in unique(df[,groups])) {
     tmp = df[df[,groups]==i,]
-    acc_v = c(acc_v,mean(balanced_score(tmp$test,tmp$pred)))
+    acc_v = c(acc_v,mean(balanced_score(tmp$observed,tmp$predicted)))
   }
   return(acc_v)
 }
 
 merged = rbind.data.frame(OR_list, Sh_list)
+merged$result = as.numeric(merged$observed==merged$predicted)
+
 write.table(merged,"data/F2d_654_raw_result.txt")
 
 th = c(2600, 4000, 6000, 8000)
@@ -705,10 +768,11 @@ Sh_acc = cbind(unlist(Sh_acc_list),c(rep(th[1],length(Sh_acc_list[[1]])),
 df = rbind.data.frame(OR_acc,Sh_acc)
 
 colnames(df) = c("Balanced_accuracy", "Threshold", "Group")
+
+
 df$Balanced_accuracy = as.numeric(df$Balanced_accuracy)
 df$Balanced_accuracy = df$Balanced_accuracy*100
-write.table(df, "data/F2d_654_result.txt")
-df = read.table("data/F2d_654_result.txt")
+
 df$Threshold = as.character(df$Threshold)
 df$Group = factor(df$Group, levels = c("Shuffle", "OR"))
 
@@ -722,7 +786,7 @@ for (i in 1:length(unique(df$Threshold))) {
   print(x)
   print(x$p.value)
 }
-
+write.table(df, "data/F2d_654_result.txt")
 pdf("plots/Figure2d_right.pdf", width = 5, height = 7)
 ggplot(df, aes(x = Group, y = Balanced_accuracy, fill = Threshold, color = Threshold))+geom_boxplot()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   xlab(NULL)+ylab("Balanced accuracy")+stat_summary(fun=mean, colour="red", geom="text",show.legend = FALSE, aes(x = Group, y = Balanced_accuracy, group = Threshold,label=round(..y.., digits=2)),
@@ -735,8 +799,89 @@ for (i in 1:length(unique(df$Threshold))) {
   print(compare_means(Balanced_accuracy ~ Group, data = df[df$Threshold==unique(df$Threshold)[i],], method = "t.test"))
 }
 
+
+
+
+
 ##### E5a and table S2 #####
-# Get the biological process GO term with at least 150 genes
+OSN_10_rm = readRDS("data/OR_OSN_10_rm.rds")
+AG_genes = grep("Eph|Nrp|Kirrel|Efn|Pcdh|Sema|Plxn|Robo|Slit|Ntn|Wnt", rownames(OSN_10_rm), value = T)
+AG_genes = grep("Pcdha|Pcdhb|Pcdhg", AG_genes, value = T, invert = T)
+
+ORs = as.character(unique(OSN_10_rm$OR_identity))
+train.index <- createDataPartition(OSN_10_rm$OR_identity, p = 0.75, list = FALSE)
+test_cells = Cells(OSN_10_rm)[-train.index]
+train_cells = Cells(OSN_10_rm)[train.index]
+
+train_data = subset(OSN_10_rm, cells = train_cells)
+test_data = subset(OSN_10_rm, cells = test_cells)
+train_metadata = train_data@meta.data
+#take min number of cells
+ncells = min(table(train_data$OR_identity))
+
+# split each OSN group of min number
+chunks <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
+ncells_list = list()
+for (i in 1:length(ORs)) {
+  sub =  train_metadata[train_metadata$OR_identity==ORs[i],]
+  ncells_list[[i]] = chunks(sample(rownames(sub)), ncells)
+}
+
+# average the normalized transcriptome into avergae cells
+train_metadata$group = NA
+for (i in 1:ncells) {
+  cell = unlist(lapply(ncells_list, `[[`, i))
+  train_metadata$group[rownames(train_metadata)%in%cell]=i
+}
+train_metadata$ave_cell = paste0(train_metadata$OR_identity,"_",train_metadata$group)
+
+train_data@meta.data = train_metadata
+Idents(train_data) = train_data$ave_cell
+train_data_ave = AverageExpression(train_data, return.seurat = T)
+train_data_ave = FindVariableFeatures(train_data_ave)
+train_data_ave$OR_identity = gsub("_.*","",colnames(train_data_ave))
+
+#pca with the averaged cells
+train_data_ave_norm = train_data_ave@assays$RNA@data[AG_genes,]
+AG_genes = AG_genes[-as.numeric(which(apply(train_data_ave_norm, 1, var) == 0))]
+train_data_ave_norm = train_data_ave@assays$RNA@data[AG_genes,]
+prin_comp <- prcomp(t(train_data_ave_norm), center = TRUE,scale. = TRUE)
+# project all the train data onto the PCA space generated by the averaged train cells
+train_data_norm = train_data@assays$RNA@data[AG_genes,]
+projected_train_data = scale(t(as.matrix(train_data_norm)), prin_comp$center, prin_comp$scale) %*% prin_comp$rotation 
+all(rownames(projected_train_data)==colnames(train_data))
+projected_train_data = as.data.frame(projected_train_data)
+projected_train_data = projected_train_data[,1:50]
+projected_train_data$OR = train_data$OR_identity
+saveRDS(prin_comp, paste0("data/pca_AG.rds"))
+write.csv(projected_train_data, paste0("data/train_AG.csv"))
+
+# project all the test data onto the PCA space generated by the averaged train cells
+test_data_norm = test_data@assays$RNA@data[AG_genes,]
+projected_test_data = scale(t(as.matrix(test_data_norm)), prin_comp$center, prin_comp$scale) %*% prin_comp$rotation 
+all(rownames(projected_test_data)==colnames(test_data))
+projected_test_data = as.data.frame(projected_test_data)
+projected_test_data = projected_test_data[,1:50]
+projected_test_data$OR = test_data$OR_identity
+write.csv(projected_test_data, paste0("data/test_AG.csv"))
+
+#AG_OSN_SVM.ipynb was used to get AG_OSN_coef.csv
+pca = readRDS("data/pca_AG.rds")
+loading = pca$rotation[,c(1:8)]
+SVM_coef = read.csv("data/SVM_AG_coef.csv")
+loading = abs(loading)
+for (i in 1:8) {
+  loading[,i] = loading[,i]*SVM_coef[,2][i]
+}
+loading = as.data.frame(loading)
+loading$contribution = rowSums(loading)
+loading = loading[order(loading$contribution,decreasing = T),]
+res = loading[,9,drop=F]
+res$gene = rownames(res)
+openxlsx::write.xlsx(res, file = "data/Supplementary table 2.xlsx", overwrite = T, )
+
+
+# Get the biological process & Molecular function GO term with at least 150 genes
 k = keys(org.Mm.eg.db, keytype="GO")
 df = AnnotationDbi::select(org.Mm.eg.db, keys=k, columns=c("ONTOLOGY"), keytype="GO")
 df = df[df$ONTOLOGY=="BP",]
@@ -745,44 +890,6 @@ k = unique(BPGO)
 df = AnnotationDbi::select(org.Mm.eg.db, keys=k, columns=c("SYMBOL"), keytype="GO")
 df = df[,c("GO","SYMBOL")]
 df = df[df$SYMBOL%in%rownames(OSN),]
-#GO:0007411
-dfAG = df[df$GO=="GO:0007411",]
-
-dfAG
-Freq = as.data.frame(table(OSN$OR_identity))
-Freq = Freq[order(Freq$Freq, decreasing = T),]
-ORs = Freq$Var1[1:654]
-Idents(OSN) = OSN$OR_identity
-OSN = subset(OSN, ident = ORs)
-genes = dfAG$SYMBOL
-VariableFeatures(OSN) = genes
-OSN = ScaleData(OSN, features = genes)
-OSN = RunPCA(OSN, npcs = 50)
-OSN = RunHarmony(OSN, group.by.vars = "orig.ident")
-OSN = FindNeighbors(OSN, reduction = "harmony")
-OSN = RunSPCA(OSN, graph = "RNA_snn")
-df = as.data.frame(OSN@reductions$spca@cell.embeddings)
-df$observed = OSN$OR_identity
-write.csv(df, "data/AG_OSN.csv")
-#AG_OSN_SVC.ipynb was used to get AG_OSN_coef.csv
-coef = read.csv("data/AG_OSN_coef.csv",row.names = 1)
-coef = abs(coef)
-coef = as.numeric(apply(coef, 2, mean))
-loading = Loadings(object = OSN10[["harmony"]])
-loading = abs(loading)
-
-PCs = list()
-for (i in 1:ncol(loading)) {
-  PCs[[i]] = coef[i]*loading[,i]
-}
-PCs = cbind.data.frame(PCs)
-colnames(PCs) = paste0("PC_",1:50)
-PCs$contribution = rowSums(PCs)
-PCs = PCs[order(PCs$contribution, decreasing = T),]
-openxlsx::write.xlsx(PCs[,51,drop=F], file = "data/Supplementary table 2.xlsx")
-
-
-
 
 x = df %>%
   group_by(GO) %>%
@@ -790,40 +897,7 @@ x = df %>%
 x = x[x$count>=150,]
 ref = x$GO
 saveRDS(ref, "data/Go_ID_BP.rds")
-# get 10 OR groups
 
-# The OSN10.rds and Go_ID_BP.rds was used as the input of GO_150_input_generation.R to generate the input of classifier on hpcc,
-# Each GO, 100 different input was generated by ramdom sampling the genes in that GO term as the variable genes for PCA
-# The Balanced_SVC_GO.py was used to run the prediction result of each GO. the results were downloaded to the data/ 
-goterms <- as.data.frame(Term(GOTERM))
-gonames = goterms[ref,]
-ref = gsub(":","_",ref)
-
-file_list = list()
-for (i in 1:length(ref)) {
-  if (length(list.files(path = "data/clf_10_GO_150_BP/",
-                        pattern = ref[i], full.names = T))==0) {
-    next
-  }
-  myfiles = lapply(list.files(path = "data/clf_10_GO_150_BP/",
-                              pattern = ref[i], full.names = T), read.csv)
-  myfiles = do.call(rbind.data.frame, myfiles)
-  myfiles$X = gonames[i]
-  file_list[[i]] = myfiles
-}
-file_list = do.call(rbind.data.frame,file_list)
-file_list = file_list[!(file_list$X=="biological_process"),]
-file_list$X = Hmisc::capitalize(as.character(file_list$X))
-
-pdf("plots/FigureE5a.pdf", width = 20, height = 8)
-ggplot(file_list, aes(x = forcats::fct_reorder(X, balanced_score, .desc = T), y = balanced_score))+geom_boxplot()+
-  xlab(NULL)+ylab("Balanced Accuracy")+ylim(c(0,1))+
-  scale_y_continuous(expand = expansion(mult = c(0.15, 0.15)))+
-  theme_classic()+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1), legend.position = "none")
-dev.off()
-
-##### E5b #####
-# Get the biological process GO term with at least 150 genes
 k = keys(org.Mm.eg.db, keytype="GO")
 df = AnnotationDbi::select(org.Mm.eg.db, keys=k, columns=c("ONTOLOGY"), keytype="GO")
 df = df[df$ONTOLOGY=="MF",]
@@ -832,147 +906,120 @@ k = unique(MFGO)
 df = AnnotationDbi::select(org.Mm.eg.db, keys=k, columns=c("SYMBOL"), keytype="GO")
 df = df[,c("GO","SYMBOL")]
 df = df[df$SYMBOL%in%rownames(OSN),]
+
 x = df %>%
   group_by(GO) %>%
   summarise(count = n_distinct(SYMBOL))
 x = x[x$count>=150,]
 ref = x$GO
 saveRDS(ref, "data/Go_ID_MF.rds")
+
 # get 10 OR groups
-
-# The OSN10.rds and Go_ID_MF.rds was used as the input of GO_150_input_generation.R to generate the input of classifier on hpcc,
+# The OSN_10.rds, Go_ID_BP.rds, Go_ID_MF.rds  was used as the input of classifier_input_generation_10_OR_GO_hpcc.R to generate the input of classifier on hpcc,
 # Each GO, 100 different input was generated by ramdom sampling the genes in that GO term as the variable genes for PCA
-# The Balanced_SVC_GO.py was used to run the prediction result of each GO. the results were downloaded to the data/ 
-goterms <- as.data.frame(Term(GOTERM))
-gonames = goterms[ref,]
-ref = gsub(":","_",ref)
+# The SVM_10.py was used to run the prediction result of each GO. the results were downloaded to the data/SVM_10_BP SVM_10_MF
+# note that the same analysis was done with the 654 group, the result are the same that Axon guidance genes shown as the top contributor
 
-file_list = list()
-for (i in 1:length(ref)) {
-  if (length(list.files(path = "data/clf_10_GO_150_MF/",
-                        pattern = ref[i], full.names = T))==0) {
-    next
-  }
-  myfiles = lapply(list.files(path = "data/clf_10_GO_150_MF/",
-                              pattern = ref[i], full.names = T), read.csv)
-  myfiles = do.call(rbind.data.frame, myfiles)
-  myfiles$X = gonames[i]
-  file_list[[i]] = myfiles
+files = list.files("data/SVM_10_BP", full.names = T)
+GO10 = list()
+for (i in 1:length(files)) {
+  tmp = read.csv(files[i])
+  GO = gsub(".*/","",files[i])
+  GO_name = strsplit(GO,"_")[[1]][2]
+  rep = strsplit(GO,"_")[[1]][4]
+  rep = gsub(".csv","",rep)
+  tmp = tmp[,c("barcode","observed","predicted")]
+  tmp$rep = rep
+  acc = grouped_acc(tmp, "rep")
+  tmp = c(GO_name,rep,acc)
+  GO10[[i]] = tmp
 }
-file_list = do.call(rbind.data.frame,file_list)
-file_list = file_list[!(file_list$X=="Molecular_function"),]
-file_list$X = Hmisc::capitalize(as.character(file_list$X))
+GO10 = do.call(rbind.data.frame,GO10)
+colnames(GO10) = c("GO","rep","acc")
+goterms <- as.data.frame(Term(GOTERM))
+rownames(goterms) = gsub("GO:","",rownames(goterms) )
+GO10$GO = goterms[GO10$GO,]
+GO10$GO = Hmisc::capitalize(as.character(GO10$GO))
+GO10$acc = as.numeric(GO10$acc)
 
-pdf("plots/FigureE5b.pdf", width = 20, height = 8)
-ggplot(file_list, aes(x = forcats::fct_reorder(X, balanced_score, .desc = T), y = balanced_score))+geom_boxplot()+
+files = list.files("data/AG_SVM_10_AM/", full.names = T)
+AM10 = list()
+for (i in 1:length(files)) {
+  tmp = read.csv(files[i])
+  tmp = tmp[,c("barcode","observed","predicted")]
+  tmp$rep = i
+  acc = grouped_acc(tmp, "rep")
+  tmp = c(as.character(i),acc)
+  AM10[[i]] = tmp
+}
+AM10 = do.call(rbind.data.frame,AM10)
+colnames(AM10) = c("rep","acc")
+AM10$GO = "Axon guidance and cell adhesion (curated)"
+tmp = rbind.data.frame(GO10,AM10)
+tmp$acc = as.numeric(tmp$acc)
+pdf("plots/FigureE5a.pdf", width = 20, height = 8)
+ggplot(tmp, aes(x = forcats::fct_reorder(GO, acc, .desc = T), y = acc))+geom_boxplot()+
   xlab(NULL)+ylab("Balanced Accuracy")+ylim(c(0,1))+
   scale_y_continuous(expand = expansion(mult = c(0.15, 0.15)))+
   theme_classic()+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1), legend.position = "none")
 dev.off()
 
-##### 2e and 2f #####
-#reload data/MOE.rds
-Idents(MOE) = MOE$cell_type
-iOSN = subset(MOE, idents = "iOSN") #3192
-EM = GetAssayData(iOSN, slot = "count")
-EM = EM[grep("Olfr",rownames(EM)),]
-EM[EM==1] = 0
-EM[EM>0] = 1
-OR_count = colSums(EM)
-sum(OR_count==0)
-tot = sum(OR_count>0) #2568
-sig = sum(OR_count==1) #1949
-doub = sum(OR_count>1) #619
+bootdata=list()
+for (i in 1:length(unique(tmp$GO))) {
+  sub_tmp = tmp[tmp$GO==unique(tmp$GO)[i],]
+  bootdata[[i]]=sub_tmp[sample(nrow(sub_tmp), 1000, replace=TRUE), ]
+}
+bootdata = do.call(rbind.data.frame,bootdata)
+pdf("plots/FigureE5a.pdf", width = 20, height = 8)
+ggplot(bootdata, aes(x = forcats::fct_reorder(GO, acc, .desc = T), y = acc))+geom_boxplot()+
+  xlab(NULL)+ylab("Balanced Accuracy")+ylim(c(0,1))+
+  scale_y_continuous(expand = expansion(mult = c(0.15, 0.15)))+
+  theme_classic()+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1), legend.position = "none")
+dev.off()
 
-#check 2 more OR iOSN
-iOSN2up = subset(iOSN, cells = colnames(EM)[OR_count>1])
-iOSN1 = subset(iOSN, cells = colnames(EM)[OR_count==1])
-NEM1 = GetAssayData(iOSN1, slot = "data")
-NEM1 = NEM1[grep("Olfr",rownames(NEM1)),]
-NEM = GetAssayData(iOSN2up, slot = "data")
-NEM = NEM[grep("Olfr",rownames(NEM)),]
-#take the iOSN with a dominate OR with normalized expression >2
-sum(apply(NEM1, 2, max)>2)#1727
-sum(apply(NEM, 2, max)>2) #575
-cells = c(colnames(NEM1)[apply(NEM1, 2, max)>2],colnames(NEM)[apply(NEM, 2, max)>2])
-iOSN_s = subset(iOSN, cells = cells) #2302
-NEM = GetAssayData(iOSN_s, slot = "data")
-NEM = NEM[grep("Olfr",rownames(NEM)),]
-iOSN_s$OR_identity = rownames(NEM)[apply(NEM, 2, which.max)]
 
-OR_freq = data.frame(table(OSN$OR_identity))
-OR_freq = OR_freq[OR_freq$Freq>=7,]
-cells = colnames(iOSN_s)[iOSN_s$OR_identity%in%OR_freq$Var1] # get the cells with the OR ident included
-iOSN_s = subset(iOSN_s, cells = cells)
-metadf = iOSN_s@meta.data
-iOSN_s = GetAssayData(iOSN_s, "counts")
-iOSN_s = iOSN_s[grep("Olfr",rownames(iOSN_s),invert = T),]
-iOSN_s = CreateSeuratObject(iOSN_s)
-iOSN_s@meta.data = metadf #1918 cells
+##### E5b #####
+# Get the biological process GO term with at least 150 genes
+#same procedure as E5a but use the genes in MF
+files = list.files("data/SVM_10_MF", full.names = T)
+GO10 = list()
+for (i in 1:length(files)) {
+  tmp = read.csv(files[i])
+  GO = gsub(".*/","",files[i])
+  GO_name = strsplit(GO,"_")[[1]][2]
+  rep = strsplit(GO,"_")[[1]][4]
+  rep = gsub(".csv","",rep)
+  tmp = tmp[,c("barcode","observed","predicted")]
+  tmp$rep = rep
+  acc = grouped_acc(tmp, "rep")
+  tmp = c(GO_name,rep,acc)
+  GO10[[i]] = tmp
+}
+GO10 = do.call(rbind.data.frame,GO10)
+colnames(GO10) = c("GO","rep","acc")
+goterms <- as.data.frame(Term(GOTERM))
+rownames(goterms) = gsub("GO:","",rownames(goterms) )
+GO10$GO = goterms[GO10$GO,]
+GO10$GO = Hmisc::capitalize(as.character(GO10$GO))
+GO10$acc = as.numeric(GO10$acc)
 
-Idents(OSN) = OSN$OR_identity
-OSN654rm =  FindVariableFeatures(OSN654rm, nfeatures = 3000) 
-vargene = VariableFeatures(OSN654rm)
-mergedOSN = merge(OSN654, iOSN_s)
-mergedOSN = NormalizeData(mergedOSN) %>% FindVariableFeatures(nfeatures = 3000) 
-VariableFeatures(mergedOSN) = VariableFeatures(OSN654)
-mergedOSN = ScaleData(mergedOSN) %>% RunPCA()
-mergedOSN = RunHarmony(mergedOSN, group.by.vars = "orig.ident") %>% FindNeighbors(reduction = "harmony") %>% RunSPCA(graph = "RNA_snn")
-df = as.data.frame(mergedOSN@reductions$spca@cell.embeddings)
-df$observed = mergedOSN$OR_identity
-dftrain = df[is.na(mergedOSN$cell_type),] #OSN
-dftest = df[!is.na(mergedOSN$cell_type),] #iOSN
-write.csv(dftrain,"data/svm_OSN_50SPCs_3000G.csv")
-write.csv(dftest,"data/svm_iOSN_50SPCs_3000G.csv")
-# Balanced_SVC_iOSN.ipynb was used to do the prediction and the result was saved as data/iOSN_prediction_result.csv
-Idents(MOE) = MOE$cell_type
-pdo = read.csv("data/iOSN_prediction_result.csv")
-pdo$classification = as.numeric(pdo$Ob==pdo$Pd)
-iOSN = subset(MOE, cells = pdo$bc)
-Seurat_Object_Diet <- DietSeurat(iOSN, graphs = "umap",dimreducs = "pca")
-cds <- as.cell_data_set(Seurat_Object_Diet)
-cds <- cluster_cells(cds, k = 7)
-p1 <- plot_cells(cds, show_trajectory_graph = FALSE)
-p2 <- plot_cells(cds, color_cells_by = "partition", show_trajectory_graph = FALSE)
-wrap_plots(p1, p2)
-cds <- learn_graph(cds)
-colData(cds)$cell_type = iOSN$cell_type
-colData(cds)$classification = pdo$Ob==pdo$Pd
-colData(cds)$classification  = factor(colData(cds)$classification, levels = rev(unique(colData(cds)$classification)))
-plot_cells(cds,
-           color_cells_by = "classification",
-           show_trajectory_graph = F,
-           label_groups_by_cluster=FALSE,
-           label_leaves=FALSE,
-           label_branch_points=FALSE, cell_size = 1)+NoAxes()+NoLegend()
-ggsave("plots/Figure2e_right.jpeg", width = 5, height = 5, dpi = 300)
+bootdata=list()
+for (i in 1:length(unique(GO10$GO))) {
+  sub_tmp = GO10[GO10$GO==unique(GO10$GO)[i],]
+  bootdata[[i]]=sub_tmp[sample(nrow(sub_tmp), 1000, replace=TRUE), ]
+}
+bootdata = do.call(rbind.data.frame,bootdata)
+pdf("plots/FigureE5b.pdf", width = 20, height = 8)
+ggplot(bootdata, aes(x = forcats::fct_reorder(GO, acc, .desc = T), y = acc))+geom_boxplot()+
+  xlab(NULL)+ylab("Balanced Accuracy")+ylim(c(0,1))+
+  scale_y_continuous(expand = expansion(mult = c(0.15, 0.15)))+
+  theme_classic()+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1), legend.position = "none")
+dev.off()
 
-pdo$pseudotime = pseudotime(cds, reduction_method = "UMAP")
-cds <- order_cells(cds)
-plot_cells(cds,
-           color_cells_by = "pseudotime",
-           show_trajectory_graph = F,
-           label_cell_groups=FALSE,
-           label_leaves=FALSE,
-           label_branch_points=FALSE,
-           graph_label_size=1.5, cell_size = 1)+NoAxes()+NoLegend()
-ggsave("plots/Figure2e_left.pdf", width = 5, height = 5, units = "in")
-ggsave("plots/Figure2e_left.jpeg", width = 5, height = 5, units = "in", dpi = 300)
-
-plot_df <-
-  plot_df %>% 
-  mutate(Correct = ifelse(classification == 1, pseudotime, NA),
-         Fales     = ifelse(classification == 0, pseudotime, NA))
-
-base <-
-  ggplot(plot_df, aes(x = pseudotime)) +
-  geom_line(aes(y = .fitted), color = "blue") 
-base + stat_summary_bin(geom = "point", fun = mean, aes(y = classification), bins = 10)+
-  ylab("Percentage of correct classification")+xlab("binned pseudotime")+theme_classic()
-ggsave("plots/Figure2f.pdf", width = 2, height = 3, units = "in")
-
-##### 2g and E5c #####
-#reload Simi and OR_info
+##### 2e and E5c #####
+OSN = readRDS("data/OR_OSN.rds")
+OR_info = read.table("data/OR_cluster_info.txt", header = T)
+Simi = readRDS("data/OR_similarity_score_default.rds")
 merged = read.table("data/F2d_654_raw_result.txt")
 OR_info = OR_info[!duplicated(OR_info$gene_name),]
 rownames(OR_info) = OR_info$gene_name
@@ -980,17 +1027,17 @@ OSN$OR_cluster = OR_info[OSN$OR_identity,"OR_cluster"]
 OSN$chr = OR_info[OSN$OR_identity,"seqnames"]
 OSN$class = OR_info[OSN$OR_identity,"Class"]
 metadf = OSN@meta.data
-metadf = metadf[metadf$OR_identity%in%unique(merged$test),]
-Simi = Simi[unique(merged$test),unique(merged$test)]
-wrong = merged[!(merged$test==merged$pred),]
+metadf = metadf[metadf$OR_identity%in%unique(merged$observed),]
+Simi = Simi[unique(merged$observed),unique(merged$observed)]
+wrong = merged[!(merged$observed==merged$predicted),]
 
 Simi_long = melt(Simi)
 rownames(Simi_long) = paste(Simi_long$Var1,Simi_long$Var2, sep = "_")
-wrong$test_chr = OR_info[wrong$test,"seqnames"]
-wrong$pred_chr = OR_info[wrong$pred,"seqnames"]
-wrong$test_cls = OR_info[wrong$test,"OR_cluster"]
-wrong$pred_cls = OR_info[wrong$pred,"OR_cluster"]
-wrong$pairs = paste(wrong$test,wrong$pred, sep = "_")
+wrong$test_chr = OR_info[wrong$observed,"seqnames"]
+wrong$pred_chr = OR_info[wrong$predicted,"seqnames"]
+wrong$test_cls = OR_info[wrong$observed,"OR_cluster"]
+wrong$pred_cls = OR_info[wrong$predicted,"OR_cluster"]
+wrong$pairs = paste(wrong$observed,wrong$predicted, sep = "_")
 wrong$similarity = Simi_long[wrong$pairs,"value"]
 wrong$chr = as.numeric(wrong$test_chr==wrong$pred_chr)
 wrong$OR_cluster = as.numeric(wrong$test_cls==wrong$pred_cls)
@@ -1008,12 +1055,12 @@ summary_df_s = summary_df[summary_df$group=="sh",]
 summary_df_t = summary_df[summary_df$group=="OR",]
 
 fcdf = cbind.data.frame("value" = c(summary_df_t$simi/summary_df_s$simi,summary_df_t$chr2/summary_df_s$chr2,summary_df_t$cls2/summary_df_s$cls2),
-                     "group" = c(rep("simi",nrow(summary_df_t)),rep("chr",nrow(summary_df_t)),rep("cls",nrow(summary_df_t))))
+                        "group" = c(rep("simi",nrow(summary_df_t)),rep("chr",nrow(summary_df_t)),rep("cls",nrow(summary_df_t))))
 
 pairwise_t_test(data = fcdf, value ~ group, p.adjust.method = "BH")
 fcdf$fold_change = log2(as.numeric(fcdf$value))
 fcdf$group = factor(fcdf$group,levels = c("chr","cls","simi"))
-pdf("plots/Figure2g.pdf", width = 5, height = 7)
+pdf("plots/Figure2e.pdf", width = 5, height = 7)
 ggboxplot(as.data.frame(fcdf), x = "group", y = "fold_change", color = "group")+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+theme(legend.position = "none")+
   ylab("fold change")+scale_color_manual(values = c("#EB4136", "#009044", "#1C75B8"))
@@ -1060,7 +1107,7 @@ for (i in 1:length(len)) {
 
 
 fcdf = as.data.frame(cbind(fold_change = c(unlist(bin_list)),
-                             group = c(namev)))
+                           group = c(namev)))
 fcdf$fold_change = log2(as.numeric(fcdf$fold_change))
 
 for (i in 1:length(unique(fcdf$group))) {
@@ -1079,11 +1126,16 @@ ggboxplot(as.data.frame(fcdf), x = "group", y = "fold_change", color = "group")+
   ylab("fold change")
 dev.off()
 
+
+
 ##### E5d #####
 #reload Simi
 Simi = as.data.frame(as.matrix(Simi))
-df = read.csv("data/svm_654_rm_all_50SPCs_3000G.csv")
-df_mean = aggregate(df[,1:50], list(OSN654$observed), mean)
+OSN654 = readRDS("data/OR_OSN_654_rm.rds")
+df = as.data.frame(OSN654@reductions$harmony@cell.embeddings)
+df$OR = OSN654$OR_identity
+write.table(df, "data/OR_OSN_654_50PC_3000g.txt", col.names = NA)
+df_mean = aggregate(df[,1:50], list(df$OR), mean)
 rownames(df_mean) = df_mean$Group.1
 df_mean = df_mean[,-1]
 cor_df = cor(t(df_mean))
@@ -1114,7 +1166,7 @@ ggplot(Simi2, aes(x=cuts, y=correlation, color = cuts))+
   geom_errorbar(stat="summary", fun.data="mean_se",width=.2)+theme(legend.position = "none")+ylab("transcriptome correlation")+xlab("protein sequence similarity score")+theme_classic()+theme(legend.position = "none")
 dev.off()
 
-##### E5e  #####
+##### 2f  #####
 #reload OSN, Simi, OR_info
 OR_info = OR_info[!is.na(OR_info$OR_cluster),]
 OR_set1 = unique(OSN$OR_identity)
@@ -1192,18 +1244,19 @@ p2 = ggscatter(all_result, x = "distance", y = "correlation", size = 0, alpha = 
   scale_fill_viridis()+
   stat_cor(method = "pearson", label.y = 1.1)+ theme(legend.position = "right")+labs(fill = "Counts")
 
-pdf("plots/FigureE2e.pdf", width = 10, height = 5)
+pdf("plots/Figure2f.pdf", width = 10, height = 5)
 p1|p2
 dev.off()
 
-##### 5f #####
+##### E5f #####
 #reload OSN, Simi, OR_info
-OR_set1 = unique(OSN$OR_identity)
+OR_set1 = unique(OSN_rm$OR_identity)
 OR_set2 = unique(OR_info$gene_name)
 OR_set3 = unique(rownames(as.matrix(Simi)))
 common_OR = intersect(OR_set1,intersect(OR_set2,OR_set3))
-df = read.csv("data/FE5_common_OSN_50SPCs_3000G.csv", row.names = 1)
-df_mean = aggregate(df[,1:50], list(df$OR_identity), mean)
+df = as.data.frame(OSN_rm@reductions$harmony@cell.embeddings)
+df$OR = OSN_rm$OR_identity
+df_mean = aggregate(df[,1:50], list(df$OR), mean)
 rownames(df_mean) = df_mean$Group.1
 df_mean = df_mean[,-1]
 cor_df = cor(t(df_mean))
@@ -1300,7 +1353,6 @@ Heatmap(as.matrix(OR_ch7), cluster_columns = F, cluster_rows = F, name = "score"
 dev.off()
 
 ##### 3b #####
-img = readJPEG("data/projection2.jpg")
 dt = readRDS("data/OB2_slideseq/Slide11.rds")
 genes = c("Kctd12","Calb2", "Cdhr1","Pcp4","Sox11")
 ldf = cbind.data.frame("x"=c(1,2,3,4),"y"=c(5,6,7,8))
@@ -1335,14 +1387,11 @@ ggsave("plots/Figure3c.jpeg", width = 33, height = 5, dpi = 300, units = "in")
 df = read.table("data/map_obs.txt", header = T)
 pdf("plots/Figure3d.pdf", width = 10, height = 10)
 ggplot(df, aes(x = x, y = y, label = OR))+background_image(img)+geom_point()+
-  geom_text_repel()+xlab("A---P")+ylab("V---D")+xlim(c(1.00000,21.29802))+ylim(c(-4584.6427,292.5073))+theme_classic()
+  geom_text_repel()+xlab("A---P")+ylab("V---D")+xlim(c(0,2450))+ylim(c(-3130,300))+theme_classic()
 dev.off()
 
 ##### 3e #####
 # reload OR_OSN_rm.rds
-Freq = data.frame(table(OSN_rm$OR_identity))
-ORs = as.character(Freq$Var1[Freq$Freq>=7])
-Idents(OSN_rm) = OSN_rm$OR_identity
 OSN_rm_ave = AverageExpression(OSN_rm, return.seurat = T)
 OSN_rm_ave = FindVariableFeatures(OSN_rm_ave, nfeatures = 3000)
 v3k = VariableFeatures(OSN_rm_ave)
@@ -1354,12 +1403,10 @@ df = as.data.frame(OSN_rm@reductions$harmony@cell.embeddings)
 df$observed = OSN_rm$OR_identity
 write.table(df, "data/LR_OSN_all_50PCs_3000G.csv", sep = ",")
 
-#svm_10_rm_all_50SPCs_3000G.csv and LR_LOO.ipynb was used to generate leave one out prediction
+#LR_OSN_all_50PCs_3000G.csv and LR_LOO.ipynb was used to generate leave one out prediction
 
 dfx = read.csv("data/LR_LOO_x.csv", header = T)
 dfy = read.csv("data/LR_LOO_y.csv", header = T)
-dfx[,c(2,3)] = dfx[,c(2,3)]*130 # switch unit to um
-dfy[,c(2,3)] = dfy[,c(2,3)]*0.65 # switch unit to um
 df = data.frame(cbind(rep(dfx$OR,2),
                       c(dfx$observed,dfx$predicted),
                       c(dfy$observed,dfy$predicted),
@@ -1369,11 +1416,13 @@ df$x = as.numeric(df$x)
 df$y = as.numeric(df$y)
 
 
-OR_candidates = c("Olfr1217","Olfr654","Olfr598","Olfr788","Olfr47","Olfr464")
+
+
+OR_candidates = c("Olfr1217", "Olfr1364" ,"Olfr1030"  , "Olfr47" ,  "Olfr1250"  ,"Olfr598" )
 plots = list()
 for (i in 1:length(OR_candidates)) {
   plots[[i]] = ggplot(df[df$OR==OR_candidates[i],], aes(x = x, y = y, color = group))+
-    background_image(img)+geom_point(size =10)+xlab("A---P")+ylab("V---D")+xlim(c(1.00000*130,21.29802*130))+ylim(c(-4584.6427*0.65,292.5073*0.65))+theme_classic()+NoLegend()+NoAxes()
+    background_image(img)+geom_point(size =10)+xlab("A---P")+ylab("V---D")+xlim(c(0,3000))+ylim(c(-3000,400))+theme_classic()+NoLegend()+NoAxes()
 }
 pdf("plots/Figure3e.pdf", width = 20, height = 30)
 wrap_plots(plots, ncol = 2)
@@ -1386,7 +1435,7 @@ p1 = ggplot(dfx,aes(predicted, observed)) + geom_point(color = "black") +
 
 
 
-p2 = ggplot(dfy,aes(predicted, observed)) + geom_point(color = "black") + 
+p2 = ggplot(dfy,aes(predicted, observed)) + geom_point(color = "black")+
   geom_smooth(method=lm) + ggtitle(paste("D-V axis","R^2 =",round(R2_Score(dfy$predicted,dfy$observed),2),"MAE =",round(MAE(dfy$predicted,dfy$observed),2), sep = " ")) +
   xlab("Predicted") + ylab("Observed")+theme_classic()
 
@@ -1403,7 +1452,7 @@ pdist = c()
 for (i in 1:nrow(dfp1)) {
   pdist[i] = dist(rbind.data.frame(dfp1[i,],dfp2[i,]))
 }
-mean(pdist) #336.2865
+mean(pdist) #310.8029
 
 ##### E6a #####
 Sets = c()
@@ -1440,45 +1489,72 @@ FeaturePlot(dt, features = "percent.mt", reduction = "Spatial", order = T, pt.si
 dev.off()
 
 ##### E6c #####
-# Auto_gl_call.R and select_cells.R are used to do the automatical glomeruli calling
+# ss_3_auto_gl_call.R and select_GL.R are used to do the automatical glomeruli calling
 
 ##### E6d #####
-#LOOCV Homography pre calculated with python script Common_OR_transform_LOOCV.ipynb
-files =list.files(pattern = "transformed_coords", path = "data/LOOCV",full.names = T)
-dflist = list()
-for (i in 1:length(files)) {
-  df = read.table(files[i])
-  colnames(df) = c("OR","x","y","rep")
-  ORs = gsub("data/LOOCV/transformed_coords_1to2_|.txt","",files[i])
-  df = df[df$OR==ORs,]
-  dflist[[i]] = df
+S1 = read.csv("data/Slideseq_1_glomeruli_position_in_um.csv")
+S2 = read.csv("data/Slideseq_2_glomeruli_position_in_um.csv")
+
+duplicated_OR = c(S1$OR,S2$OR)[duplicated(c(S1$OR,S2$OR))]
+S1_com = S1[S1$OR%in%duplicated_OR,]
+S1_com = S1_com[order(S1_com$OR),]
+S2_com = S2[S2$OR%in%duplicated_OR,]
+S2_com = S2_com[order(S2_com$OR),]
+
+ORs = S1_com$OR 
+mouse1_AP = c()
+mouse1_DV = c()
+mouse2_AP = c()
+mouse2_DV = c()
+  
+for (o in 1:length(ORs)) {
+  S1_com_13 = S1_com[!S1_com$OR%in%ORs[o],]
+  S2_com_13 = S2_com[!S2_com$OR%in%ORs[o],]
+  P = t(S1_com_13[,c("AP","DV")])
+  Q = t(S2_com_13[,c("AP","DV")])
+  K <- kabsch(P, Q)
+  P = t(S1_com[,c("AP","DV")])
+  Q = t(S2_com[,c("AP","DV")])
+  new1 = t(K$U %*% P + c(K$R))
+  new2 = t(Q)
+  new1 = as.data.frame(new1)
+  new2 = as.data.frame(new2)
+  colnames(new1) = c("AP","DV")
+  colnames(new2) = c("AP","DV")
+  new1$mouse = 1
+  new2$mouse = 2
+  new1$OR = ORs
+  new2$OR = ORs
+  mouse1_AP[o] = new1$AP[new1$OR==ORs[o]]
+  mouse2_AP[o] = new2$AP[new2$OR==ORs[o]]
+  mouse1_DV[o] = new1$DV[new1$OR==ORs[o]]
+  mouse2_DV[o] = new2$DV[new2$OR==ORs[o]]
 }
-df = do.call(rbind.data.frame, dflist)
-df1 = df[df$rep==1,]
-df2 = df[df$rep==2,]
-dfx = as.data.frame(cbind("set1" = df1$x, "set2" = df2$x))
-dfy = as.data.frame(cbind("set1" = df1$y, "set2" = df2$y))
-dfx = dfx*130
-dfy = dfy*0.65
-ggplot(dfy, aes(x = set1,y=set2))+geom_point()
-p1 = ggscatter(dfx, x = "set1", y = "set2", 
+
+result = cbind.data.frame(ORs,mouse1_AP,mouse1_DV,mouse2_AP,mouse2_DV)
+
+
+
+
+p1 = ggscatter(result, x = "mouse1_AP", y = "mouse2_AP", 
                add = "reg.line", conf.int = TRUE, add.params = list(color = "blue", fill = "lightblue"),
                cor.coef = TRUE, cor.method = "pearson", title = "A-P")
-p2 = ggscatter(dfy, x = "set1", y = "set2", 
+p2 = ggscatter(result, x = "mouse1_DV", y = "mouse2_DV", 
                add = "reg.line", conf.int = TRUE, add.params = list(color = "blue", fill = "lightblue"),
                cor.coef = TRUE, cor.method = "pearson", title = "D-V")
 
-mean(abs(dfx[,1]-dfx[,2])) # 123.8688 on A-P
-mean(abs(dfy[,1]-dfy[,2])) # 70.98301 on D-V
-dfp1 = cbind.data.frame(dfx[,1],dfy[,1])
-dfp2 = cbind.data.frame(dfx[,2],dfy[,2])
-colnames(dfp1) = c("x","y")
-colnames(dfp2) = c("x","y")
+MAE(result$mouse1_AP,mouse2_AP) # 143.1931
+MAE(result$mouse1_DV,mouse2_DV) # 110.6756
+
 pdist = c()
-for (i in 1:nrow(dfp1)) {
-  pdist[i] = dist(rbind.data.frame(dfp1[i,],dfp2[i,]))
+for (i in 1:nrow(result)) {
+  x = result[i,c(2,3)]
+  colnames(x) = c("AP","DV")
+  y = result[i,c(4,5)]
+  colnames(y) = c("AP","DV")
+  pdist[i] = dist(rbind.data.frame(x,y))
 }
-mean(pdist) #162.4773
+mean(pdist) #199.3201
 
 pdf("plots/FigureE6d.pdf", width = 10, height = 5)
 p1|p2 
@@ -1511,7 +1587,7 @@ dev.off()
 ##### 4a #####
 #load map_pre
 pdf("plots/Figure4a.pdf", width = 5, height = 5)
-ggplot(map_pre, aes(x = x, y = y))+background_image(img)+xlim(c(1.00000,21.29802))+ylim(c(-4584.6427,292.5073))+geom_point(color = "snow3")+
+ggplot(map_pre, aes(x = x, y = y))+background_image(img)+ xlim(c(0,2450))+ylim(c(-3130,300))+geom_point(color = "snow3")+
   theme(legend.position = "none")+
   geom_point(data=map_pre[map_pre$OR == "Olfr160",],color="magenta",size=2)+
   geom_point(data=map_pre[map_pre$OR == "Olfr1507",],color="green",size=2)+
@@ -1525,24 +1601,28 @@ plot_features(map_pre,"class")+NoAxes()+NoLegend()
 dev.off()
 
 ##### 4c #####
-p1 = plot_features(map_pre,"Acsm4")
-p2 = plot_features(map_pre,"Nrp2")
-p3 = plot_features(map_pre,"Plxna1")
-p4 = plot_features(map_pre,"Nrp1")
+p1 = plot_features(map_pre,"Acsm4")+NoAxes()+NoLegend()
+p2 = plot_features(map_pre,"Nrp2")+NoAxes()+NoLegend()
+p3 = plot_features(map_pre,"Plxna1")+NoAxes()+NoLegend()
+p4 = plot_features(map_pre,"Nrp1")+NoAxes()+NoLegend()
 
-pdf("plots/Figure4c.pdf", width = 12, height = 10)
+pdf("plots/Figure4c.pdf", width = 10, height = 10)
 wrap_plots(list(p1,p2,p3,p4), ncol = 2)
 dev.off()
 
 ##### 4d #####
-map_pre$x = map_pre$x*130
-map_pre$y = map_pre$y*0.64
 rownames(map_pre) = map_pre$OR
-
+m = -3
+c1 = 600
+c2 = 1800
+c3 = 3000
 spots = read.csv("data/MERFISH_spot_summary.csv", row.names = 1)
+spots$pair= factor(spots$pair)
+spots$type= factor(spots$type)
+spots$group= factor(spots$group)
 spots$set = factor(spots$set)
-ML = spots[spots$LR=="L",]
-MR = spots[spots$LR=="R",]
+ML = spots[spots$ML=="L",]
+MR = spots[spots$ML=="R",]
 distv = c()
 for (i in 1:7) {
   distv[i] = dist(ML[c(i,i+7),c("x","y")])
@@ -1550,7 +1630,7 @@ for (i in 1:7) {
 MAE = mean(distv)
 cols = hue_pal()(3)
 p1 =ggplot(ML, aes(x = x, y = y, color = set))+background_image(img)+
-  theme(legend.position = "none")+coord_cartesian(ylim=c(-4584.6427*0.65,292.5073*0.65), xlim = c(1.00000*130,21.29802*130))+
+  theme(legend.position = "none")+coord_cartesian(ylim=c(-3130,300), xlim = c(0,2450))+
   theme_classic()+scale_shape_manual(values = c(16,17))+
   geom_abline(intercept = c1, slope = m, color="pink", 
               linetype="dotted", size=1)+
@@ -1564,8 +1644,8 @@ p1 =ggplot(ML, aes(x = x, y = y, color = set))+background_image(img)+
   scale_color_manual(values=c(cols))+scale_shape_manual(values = c(16,1))
 
 distv = c()
-for (i in 1:8) {
-  distv[i] = dist(MR[c(i,i+8),c("x","y")])
+for (i in 1:7) {
+  distv[i] = dist(MR[c(i,i+7),c("x","y")])
 }
 MAE = mean(distv)
 cols = hue_pal()(3)
@@ -1596,11 +1676,9 @@ dev.off()
 
 ##### 4f #####
 Freq = as.data.frame(table(map_pre$OR_cluster))
-OR_cluster = as.character(Freq$Var1[Freq$Freq>10]) # only check the greek with more than 10 glomeruli
+OR_cluster = as.character(Freq$Var1[Freq$Freq>10]) # only check the cluster with more than 10 glomeruli
 OR_cluster = OR_cluster[order(nchar(OR_cluster), OR_cluster)]
 g2dist_df = map_pre[,c("x","y")]
-g2dist_df$x = g2dist_df$x*130
-g2dist_df$y = g2dist_df$x*0.65
 rownames(g2dist_df) = map_pre$OR
 g2dist_df = dist(g2dist_df)
 g2dist_df = melt(as.matrix(g2dist_df))
@@ -1640,8 +1718,6 @@ dev.off()
 
 ##### 4g #####
 g2dist_df = map_pre[,c("x","y")]
-g2dist_df$x = g2dist_df$x*130
-g2dist_df$y = g2dist_df$y*0.65
 rownames(g2dist_df) = map_pre$OR
 g2dist_df = dist(g2dist_df)
 g2dist_df = melt(as.matrix(g2dist_df))
@@ -1682,7 +1758,7 @@ cols = hue_pal()(6)
 cols2 = c(rep(cols[1],6),rep(cols[3],6))
 ligand_plots = list()
 for (i in 1:length(targets)) {
-  ligand_plots[[i]] = ggplot(map_pre, aes(x, y))+background_image(img)+xlim(c(1.00000,21.29802))+ylim(c(-4584.6427,292.5073))+geom_point(color = "snow3")+
+  ligand_plots[[i]] = ggplot(map_pre, aes(x, y))+background_image(img)+xlim(c(0,2450))+ylim(c(-3130,300))+geom_point(color = "snow3")+
     geom_point(data=map_pre[map_pre[,index[targets[i]]] == "Yes",],color=cols2[i],size=2)+theme_classic()+ggtitle(paste0(gsub("Ligand: ","",colnames(map_pre)[index[targets[i]]])))+NoAxes()
 }
 pdf("plots/Figure4h.pdf", width = 30, height = 10)
@@ -1693,7 +1769,7 @@ dev.off()
 # MERFISH.ipynb was used to generate the plots
 ##### E8a #####
 #reload OR_OSN
-#coefficients.txt and coefficient_p_values.txt were generated with ss_5_Glomeruli_map_reconstruction.ipynb
+#coefficients.txt and coefficient_p_values.txt were generated with ss_6_map_reconstruction.ipynb
 coefficients = read.table("data/coefficients.txt")
 coefficients_p = read.table("data/coefficient_p_values.txt")
 colnames(coefficients_p) = c("axis","PC","p_value")
@@ -1735,7 +1811,7 @@ ensembl=useMart("ensembl")
 ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
 foo <- getBM(attributes=c('entrezgene_id',
                           'mgi_symbol'),mart = ensembl)
-target_genes = (rownames(x_load)[!is.na(rownames(x_load))])[1:150]
+target_genes = (rownames(x_load)[!is.na(rownames(x_load))])[1:350]
 backgroundgenes = rownames(OSN)
 backgroundid = as.character(foo$entrezgene_id[foo$mgi_symbol%in%backgroundgenes])
 targetid = as.character(foo$entrezgene_id[foo$mgi_symbol%in%target_genes])
@@ -1745,7 +1821,7 @@ xBPgenes_df = xBPgenes@result
 xBPgenes_df$GeneRatio = as.numeric(sub('\\/.*', '', xBPgenes_df$GeneRatio))/as.numeric(sub('.*\\/', '', xBPgenes_df$GeneRatio))
 
 
-target_genes = (rownames(y_load)[!is.na(rownames(y_load))])[1:150]
+target_genes = (rownames(y_load)[!is.na(rownames(y_load))])[1:350]
 targetid = as.character(foo$entrezgene_id[foo$mgi_symbol%in%target_genes])
 
 yBPgenes = enrichGO(gene = targetid, OrgDb = org.Mm.eg.db, ont="BP", pvalueCutoff=1, pAdjustMethod="BH", universe = backgroundid, qvalueCutoff=1, minGSSize=5)
@@ -1767,7 +1843,7 @@ yBPgenes_df$group  = "D-V axis"
 df = rbind.data.frame(xBPgenes_df,yBPgenes_df)
 df$Description = factor(df$Description, levels = rev(unique(sort(df$Description))) )
 
-pdf("plots/FigureE8a.pdf", width = 10, height = 5)
+pdf("plots/FigureE8a.pdf", width = 7, height = 5)
 ggplot(df, 
        aes(x = group, y = Description)) + 
   geom_count(aes(size = Count, color = p.adjust)) +
@@ -1778,64 +1854,12 @@ ggplot(df,
 dev.off()
 
 ##### E8b #####
-source_python("lr.py")
-Freq = as.data.frame(table(OSN$OR_identity))
-Freq = Freq[Freq$Freq>=7,]
-
-goterms <- as.data.frame(Term(GOTERM))
-k = rownames(goterms)[which(goterms$`Term(GOTERM)`=="axon guidance")]
-df = AnnotationDbi::select(org.Mm.eg.db, keys=k, columns=c("SYMBOL"), keytype="GO")
-df = df[,c("GO","SYMBOL")]
-
-genes = df$SYMBOL
-
-ORs = as.character(Freq$Var1)
-Idents(OSN) = OSN$OR_identity
-ORs = as.character(ORs)
-OSN654 = subset(OSN, idents = ORs)
-subdf = OSN654@meta.data
-OSN654 = OSN654@assays$RNA@counts
-OSN654 = OSN654[grep("Olfr",rownames(OSN654), invert = T),]
-OSN654 = CreateSeuratObject(OSN654)
-OSN654 = NormalizeData(OSN654)
-genes = unique(genes[genes%in%rownames(OSN654)])
-OSN654@assays$RNA@var.features = genes
-OSN654 = ScaleData(OSN654, features = genes)
-OSN654 = RunPCA(OSN654, npcs = 50) #159
-OSN654@meta.data = subdf
-OSN654 = RunHarmony(OSN654, group.by.vars = "orig.ident")
-dfs = as.data.frame(OSN654@reductions$harmony@cell.embeddings)
-dfs$observed = OSN654$OR_identity
-result = lr(dfs)
-colnames(result) = c("OR","num","type","x","y")
-refOR = result$OR[result$type == "slide-seq"]
-result = result[result$OR%in%refOR,]
-result_obs = result[result$type=="slide-seq",]
-result_pre = result[result$type=="predicted",]
-result_obs = result_obs[order(result_obs$OR),]
-result_pre = result_pre[order(result_pre$OR),]
-dfx = data.frame(cbind("predicted" = result_pre$x,"observed"=result_obs$x))
-dfy = data.frame(cbind("predicted" = result_pre$y,"observed"=result_obs$y))
-dfx = dfx*130
-dfy = dfy*0.65
-p1 = ggplot(dfx,aes(predicted, observed)) + geom_point(color = "black") + 
-  geom_smooth(method=lm) + ggtitle(paste("A-P axis","R^2 =",round(R2_Score(dfx$predicted,dfx$observed),2),"MAE =",round(MAE(dfx$predicted,dfx$observed),2), sep = " ")) +
-  xlab("predicted") + ylab("Observed")+theme_classic()
-p2 = ggplot(dfy,aes(predicted, observed)) + geom_point(color = "black") + 
-  geom_smooth(method=lm) + ggtitle(paste("A-P axis","R^2 =",round(R2_Score(dfy$predicted,dfy$observed),2),"MAE =",round(MAE(dfy$predicted,dfy$observed),2), sep = " ")) +
-  xlab("predicted") + ylab("Observed")+theme_classic()
-
-pdf("plots/FigureE8b.pdf", width = 8, height = 4)
-p1|p2
-dev.off()
-
-##### E8c #####
 genes = c("Tubb3","Dclk1","Efna5","Dlx5","Fezf1","Sema6c","Nexn","Etv1")
 plots = list()
 for (i in 1:length(genes)) {
   plots[[i]] = plot_features(map_pre,genes[i])+NoAxes()+NoLegend()+ggtitle(genes[i])
 }
-pdf("plots/FigureE8c.pdf", width = 40, height = 5)
+pdf("plots/FigureE8b.pdf", width = 40, height = 5)
 wrap_plots(plots, ncol = 8)
 dev.off()
 
@@ -1846,7 +1870,7 @@ OR_cluster = OR_cluster[-1]
 cols = hue_pal()(length(OR_cluster))
 plots = list()
 for (i in 1:length(OR_cluster)) {
-  plots[[i]] = ggplot(map_pre, aes(x,y))+background_image(img)+xlim(c(1.00000,21.29802))+ylim(c(-4584.6427,292.5073))+ geom_point(color = "snow3")+
+  plots[[i]] = ggplot(map_pre, aes(x,y))+background_image(img)+xlim(c(0,2450))+ylim(c(-3130,300))+ geom_point(color = "snow3")+
     geom_point(data=map_pre[map_pre$OR_cluster == OR_cluster[i],],color=cols[i],size=2)+theme_classic()+NoLegend()+ggtitle(OR_cluster[i])+NoAxes()
 }  
 pdf("plots/FigureE9.pdf", width = 50, height = 30)
@@ -1856,8 +1880,6 @@ dev.off()
 ##### E10a #####
 map_preII = map_pre[map_pre$class=="II",]
 g2dist_df = map_preII[,c("x","y")]
-g2dist_df$x = g2dist_df$x*130
-g2dist_df$y = g2dist_df$y*0.65
 rownames(g2dist_df) = map_preII$OR
 g2dist_df = dist(g2dist_df)
 g2dist_df = melt(as.matrix(g2dist_df))
@@ -1887,7 +1909,7 @@ long_c2df$Var3 = log1p(long_c2df$Var2)
 pdf("plots/FigureE10a.pdf", width = 5, height = 5)
 ggplot(long_c2df, aes(x = Var2, y = value))+ 
   stat_summary(geom = "point", fun = mean, position = "dodge")+
-  stat_summary(geom = "errorbar", fun.data = mean_cl_boot, position = "dodge", alpha = 0.2)+#geom_smooth(method = 'glm')+
+  stat_summary(geom = "errorbar", fun.data = mean_cl_boot, position = "dodge", alpha = 0.2)+
   geom_smooth(method="lm", formula = y~log1p(x))+
   xlab("Ranked glomeruli position (min to max)")+ylab("Average protein similarity score")+theme_classic()
 dev.off()
@@ -1903,7 +1925,7 @@ for (i in 1:length(index)) {
   if (sum(map_pre[,index[i]]=="Yes")<2) {
     next}
   x = length(ligand_plots)
-  ligand_plots[[x+1]] = ggplot(map_pre, aes(x, y))+background_image(img)+xlim(c(1.00000,21.29802))+ylim(c(-4584.6427,292.5073))+geom_point(color = "snow3")+
+  ligand_plots[[x+1]] = ggplot(map_pre, aes(x, y))+background_image(img)+xlim(c(0,2450))+ylim(c(-3130,300))+geom_point(color = "snow3")+
     geom_point(data=map_pre[map_pre[,index[i]] == "Yes",],color= "blue",size=2)+theme_classic()+ggtitle(paste0(gsub("Ligand: ","",colnames(map_pre)[index[i]])))+NoAxes()
 }
 pdf("plots/FigureE10b.pdf", width = 24, height = 12)
@@ -1923,6 +1945,7 @@ OSN = CreateSeuratObject(OSN)
 OSN@meta.data = metadf
 OSN = NormalizeData(OSN)
 OSN = FindVariableFeatures(OSN, nfeatures = 3000)
+VariableFeatures(OSN) = v3k
 OSN = ScaleData(OSN)
 OSN = RunPCA(OSN, npcs = 50)
 OSN = RunHarmony(OSN, group.by.vars = "orig.ident")
@@ -1940,8 +1963,6 @@ den$tip.label
 rownames(map_pre) = map_pre$OR
 colnames(map_pre)[4] = "px"
 colnames(map_pre)[5] = "py"
-map_pre$px = map_pre$px*130
-map_pre$py = map_pre$py*0.65
 index = grep("Ligand",colnames(map_pre))
 ligand_name = grep("Ligand",colnames(map_pre), value = T)
 ketones = c(11,12,17,18,19,20)

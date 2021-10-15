@@ -10,7 +10,7 @@ colnames(map) = c("OR", "cell", "type", "x", "y")
 
 #ref
 map_obs = map[map$type =="slide-seq",]
-write.table(map_obs, "map_obs.txt", col.names = NA)
+write.table(map_obs, "data/map_obs.txt", col.names = NA)
 map_pre = map[map$type =="predicted",]
 
 #add chr, cluster, class
