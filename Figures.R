@@ -528,6 +528,32 @@ my_layout <- rbind(c(NA,1:9), c(rep(NA,2),10:17), c(rep(NA,3),18:24), c(rep(NA,4
 grid.arrange(grobs = UMAP_plot, layout_matrix = my_layout)
 dev.off()
 
+##### E4e #####
+OSN_marker = list.files(path = "data/DEGs/", pattern = "^Olfr", full.names = T) #all the pair DEGs between ORs
+genes = c()
+for (i in 1:length(OSN_marker)) {
+  OSN_df = readRDS(OSN_marker[i])
+  OSN_df$gene = rownames(OSN_df)
+  OSN_df = OSN_df[-grep("Olfr",OSN_df$gene),]
+  OSN_df = OSN_df[OSN_df$p_val_adj<0.05,]
+  genes = c(genes,OSN_df$gene)
+}
+genes = unique(genes)
+
+pctb = read.table("data/OSN_gene_expression_percentage.txt")
+pctb = pctb[pctb$Cell_proportion>0.1,]
+pctb = pctb[pctb$Markers%in%genes,]
+df = as.data.frame(table(pctb$Markers))
+ggplot(df, aes(x = Freq))+geom_histogram()
+
+ggplot(df, aes(x = Freq))+geom_histogram(binwidth = 1)+
+  xlab("Number of OSN groups expressing the DEG")+ylab("Count")+theme_classic()
+
+#get the blue one only
+ggplot(df, aes(x = Freq))+geom_histogram(binwidth = 1)+
+  xlab("Number of OSN groups expressing the DEG")+ylab("Count")+theme_classic()
+ggsave("plots/FigureE4e.pdf", width = 5, height = 3, dpi = 300, units = "in")
+
 ##### 2c #####
 OR654 = as.character(unique(Freq$Var1[Freq$Freq>=7]))
 OSN654 = subset(OSN, ident = OR654)
@@ -1432,13 +1458,13 @@ dev.off()
 p1 = ggplot(dfx,aes(predicted, observed)) + geom_point(color = "black") + 
   geom_smooth(method=lm) + ggtitle(paste("A-P axis","R^2 =",round(R2_Score(dfx$predicted,dfx$observed),2),"MAE =",round(MAE(dfx$predicted,dfx$observed),2), sep = " ")) +
   xlab("Predicted") + ylab("Observed")+theme_classic()
-
+#round(RMSE(dfx$predicted,dfx$observed),2)
 
 
 p2 = ggplot(dfy,aes(predicted, observed)) + geom_point(color = "black")+
   geom_smooth(method=lm) + ggtitle(paste("D-V axis","R^2 =",round(R2_Score(dfy$predicted,dfy$observed),2),"MAE =",round(MAE(dfy$predicted,dfy$observed),2), sep = " ")) +
   xlab("Predicted") + ylab("Observed")+theme_classic()
-
+#round(RMSE(dfy$predicted,dfy$observed),2)
 pdf("plots/Figure3f.pdf", width = 4, height = 8)
 p1 /
   p2
@@ -1492,6 +1518,30 @@ dev.off()
 # ss_3_auto_gl_call.R and select_GL.R are used to do the automatical glomeruli calling
 
 ##### E6d #####
+dt = readRDS("data/OB1_slideseq/Slide8.rds")
+
+EM = GetAssayData(dt, "counts")
+OR = "Olfr414"
+EM = EM[OR,,drop = F]
+cell_list = colnames(EM)[colSums(as.matrix(EM))>0]
+p1 =  FeaturePlot(dt, features = "percent.mt", reduction = "Spatial", order = T, pt.size = 0.1)+NoLegend()+NoAxes()& 
+  scale_color_viridis(option = "D", direction = -1)
+p2 = p1+geom_point(data = as.data.frame(dt@reductions$Spatial@cell.embeddings)[cell_list,], aes(x = Spatial_1, y =Spatial_2), col = 'magenta', size =2)
+
+dt = readRDS("data/OB1_slideseq/Slide9.rds")
+EM = GetAssayData(dt, "counts")
+OR = "Olfr16"
+EM = EM[OR,,drop = F]
+cell_list = colnames(EM)[colSums(as.matrix(EM))>0]
+p3 =  FeaturePlot(dt, features = "percent.mt", reduction = "Spatial", order = T, pt.size = 0.1)+NoLegend()+NoAxes()& 
+  scale_color_viridis(option = "D", direction = -1)
+p4 = p3+geom_point(data = as.data.frame(dt@reductions$Spatial@cell.embeddings)[cell_list,], aes(x = Spatial_1, y =Spatial_2), col = 'magenta', size =2)
+
+jpeg("plots/FigureE6d.jpeg", res = 300, units = "in", width = 10, height = 5)
+p2|p4
+dev.off()
+
+##### E6e #####
 S1 = read.csv("data/Slideseq_1_glomeruli_position_in_um.csv")
 S2 = read.csv("data/Slideseq_2_glomeruli_position_in_um.csv")
 
@@ -1506,7 +1556,7 @@ mouse1_AP = c()
 mouse1_DV = c()
 mouse2_AP = c()
 mouse2_DV = c()
-  
+
 for (o in 1:length(ORs)) {
   S1_com_13 = S1_com[!S1_com$OR%in%ORs[o],]
   S2_com_13 = S2_com[!S2_com$OR%in%ORs[o],]
@@ -1545,6 +1595,9 @@ p2 = ggscatter(result, x = "mouse1_DV", y = "mouse2_DV",
 
 MAE(result$mouse1_AP,mouse2_AP) # 143.1931
 MAE(result$mouse1_DV,mouse2_DV) # 110.6756
+RMSE(result$mouse1_AP,mouse2_AP) # 177.8979
+RMSE(result$mouse1_DV,mouse2_DV) # 140.1978
+
 
 pdist = c()
 for (i in 1:nrow(result)) {
@@ -1556,32 +1609,8 @@ for (i in 1:nrow(result)) {
 }
 mean(pdist) #199.3201
 
-pdf("plots/FigureE6d.pdf", width = 10, height = 5)
+pdf("plots/FigureE6e.pdf", width = 10, height = 5)
 p1|p2 
-dev.off()
-
-##### E6e #####
-dt = readRDS("data/OB1_slideseq/Slide8.rds")
-
-EM = GetAssayData(dt, "counts")
-OR = "Olfr414"
-EM = EM[OR,,drop = F]
-cell_list = colnames(EM)[colSums(as.matrix(EM))>0]
-p1 =  FeaturePlot(dt, features = "percent.mt", reduction = "Spatial", order = T, pt.size = 0.1)+NoLegend()+NoAxes()& 
-  scale_color_viridis(option = "D", direction = -1)
-p2 = p1+geom_point(data = as.data.frame(dt@reductions$Spatial@cell.embeddings)[cell_list,], aes(x = Spatial_1, y =Spatial_2), col = 'magenta', size =2)
-
-dt = readRDS("data/OB1_slideseq/Slide9.rds")
-EM = GetAssayData(dt, "counts")
-OR = "Olfr16"
-EM = EM[OR,,drop = F]
-cell_list = colnames(EM)[colSums(as.matrix(EM))>0]
-p3 =  FeaturePlot(dt, features = "percent.mt", reduction = "Spatial", order = T, pt.size = 0.1)+NoLegend()+NoAxes()& 
-  scale_color_viridis(option = "D", direction = -1)
-p4 = p3+geom_point(data = as.data.frame(dt@reductions$Spatial@cell.embeddings)[cell_list,], aes(x = Spatial_1, y =Spatial_2), col = 'magenta', size =2)
-
-jpeg("plots/FigureE6e.jpeg", res = 300, units = "in", width = 10, height = 5)
-p2|p4
 dev.off()
 
 ##### 4a #####
@@ -1628,6 +1657,9 @@ for (i in 1:7) {
   distv[i] = dist(ML[c(i,i+7),c("x","y")])
 }
 MAE = mean(distv)
+
+sqrt(sum(distv^2/length(distv))) #RMSE
+
 cols = hue_pal()(3)
 p1 =ggplot(ML, aes(x = x, y = y, color = set))+background_image(img)+
   theme(legend.position = "none")+coord_cartesian(ylim=c(-3130,300), xlim = c(0,2450))+
@@ -1648,6 +1680,9 @@ for (i in 1:7) {
   distv[i] = dist(MR[c(i,i+7),c("x","y")])
 }
 MAE = mean(distv)
+
+sqrt(sum(distv^2/length(distv))) #RMSE
+
 cols = hue_pal()(3)
 p2 =ggplot(MR, aes(x = x, y = y, color = set))+background_image(img)+
   theme(legend.position = "none")+coord_cartesian(ylim=c(-4584.6427*0.65,292.5073*0.65), xlim = c(1.00000*130,21.29802*130))+
@@ -1890,7 +1925,7 @@ for (i in 1:length(ORs)) {
   gdist_df2 = g2dist_df[g2dist_df$Var1==ORs[i],]
   rownames(gdist_df2) = gdist_df2$Var2
   gdist_df2 = gdist_df2[map_preII$OR,]
-  tmpdf = cbind(gdist_df2$value, map_preII[,paste("sim",ORs[i], sep = "_")])
+  tmpdf = cbind(gdist_df2$value, map_preII[,paste("sim2",ORs[i], sep = "_")])
   colnames(tmpdf) = c("glomerulus distance","protein sequence similarity")
   rownames(tmpdf) = map_preII$OR
   tmpdf = tmpdf[-grep(paste0("^",ORs[i],"$"), rownames(tmpdf)),]
