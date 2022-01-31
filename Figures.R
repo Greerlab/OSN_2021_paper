@@ -1241,8 +1241,8 @@ for (i in 1:length(unique(target_cluster))) {
   ORs = unique(OR_info$gene_name[OR_info$OR_cluster==target_cluster[i]])
   subdf = OR_info[OR_info$gene_name%in%ORs,c("gene_name","tss")]
   mat = as.matrix(dist(subdf$tss))
-  colnames(mat) = subdf$gene.name
-  rownames(mat) = subdf$gene.name
+  colnames(mat) = subdf$gene_name
+  rownames(mat) = subdf$gene_name
   longdf1 = melt(mat)
   longOR_info = melt(Simi2[ORs,ORs])
   longdf3 = melt(cor_df[ORs,ORs])
@@ -1711,7 +1711,7 @@ dev.off()
 
 ##### 4f #####
 Freq = as.data.frame(table(map_pre$OR_cluster))
-OR_cluster = as.character(Freq$Var1[Freq$Freq>10]) # only check the cluster with more than 10 glomeruli
+OR_cluster = as.character(Freq$Var1[Freq$Freq>=10]) # only check the cluster with more than 10 glomeruli
 OR_cluster = OR_cluster[order(nchar(OR_cluster), OR_cluster)]
 g2dist_df = map_pre[,c("x","y")]
 rownames(g2dist_df) = map_pre$OR
